@@ -6,7 +6,7 @@
 Browser-automation agent powered by LangGraph and OpenAI. It navigates sites, handles popups, extracts content, and can be used via **CLI** or **Telegram**.
 
 ---
-
+By Serenity - www.srnty-ai.com
 ## Production overview
 
 - **Runtime:** Node.js 18+
