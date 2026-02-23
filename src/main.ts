@@ -6,6 +6,7 @@ import { createBrowserTools } from "./tools/index.js";
 import { createLLM, createSystemPrompt, createGraph } from "./agent/index.js";
 import { MemoryStore } from "./memory/index.js";
 import { logger } from "./utils/index.js";
+import { TelegramBotHandler } from "./integrations/telegram.js";
 
 // Load environment variables from .env file
 config();
@@ -42,8 +43,9 @@ async function runJob(
   const startTime = Date.now();
   
   // hard safety: step limit so it can't loop forever
+  // Increased limit to allow for more exploration and investigation
   // @ts-ignore - recursionLimit may not be in types but is supported
-  const result = await graph.invoke(initial, { recursionLimit: 40 });
+  const result = await graph.invoke(initial, { recursionLimit: 60 });
   
   const duration = Date.now() - startTime;
   logger.step(`Graph execution completed in ${duration}ms`);
@@ -62,50 +64,66 @@ async function runJob(
 }
 
 async function main() {
-  // Initialize components
-  const browserController = new BrowserController();
-  const tools = createBrowserTools(browserController);
-  const llm = createLLM();
-  const systemPrompt = createSystemPrompt();
-  const graph = createGraph(llm, tools, systemPrompt);
-  const memoryStore = new MemoryStore(50); // Keep last 50 messages
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const useTelegram = !!telegramToken;
 
-  console.log("Daemon agent started. Type a task and press Enter. Ctrl+C to stop.");
-  console.log("Commands: /clear - clear conversation history, /memory - show memory stats\n");
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  if (useTelegram) {
+    // Start Telegram bot
+    const telegramBot = new TelegramBotHandler(telegramToken);
+    await telegramBot.start();
 
-  rl.on("line", async (line) => {
-    const task = line.trim();
-    if (!task) return;
+    process.on("SIGINT", async () => {
+      console.log("\nShutting down...");
+      await telegramBot.stop();
+      process.exit(0);
+    });
+  } else {
+    // Start CLI mode
+    const browserController = new BrowserController();
+    const tools = createBrowserTools(browserController);
+    const llm = createLLM();
+    const systemPrompt = createSystemPrompt();
+    const graph = createGraph(llm, tools, systemPrompt);
+    const memoryStore = new MemoryStore(50); // Keep last 50 messages
 
-    // Handle special commands
-    if (task === "/clear" || task === "/reset") {
-      memoryStore.clear();
-      console.log("✓ Conversation history cleared.\n");
-      return;
-    }
+    console.log("Daemon agent started. Type a task and press Enter. Ctrl+C to stop.");
+    console.log("Commands: /clear - clear conversation history, /memory - show memory stats\n");
+    console.log("(To use Telegram, set TELEGRAM_BOT_TOKEN in your .env file)\n");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-    if (task === "/memory" || task === "/stats") {
-      const count = memoryStore.getMessageCount();
-      console.log(`\nMemory: ${count} messages stored\n`);
-      return;
-    }
+    rl.on("line", async (line) => {
+      const task = line.trim();
+      if (!task) return;
 
-    try {
-      const out = await runJob(task, graph, memoryStore);
-      console.log("\n=== FINAL ===");
-      console.log(out);
-      console.log("=============\n");
-    } catch (e: any) {
-      console.error("Job error:", e?.message ?? e);
-    }
-  });
+      // Handle special commands
+      if (task === "/clear" || task === "/reset") {
+        memoryStore.clear();
+        console.log("✓ Conversation history cleared.\n");
+        return;
+      }
 
-  process.on("SIGINT", async () => {
-    console.log("\nShutting down...");
-    await browserController.close();
-    process.exit(0);
-  });
+      if (task === "/memory" || task === "/stats") {
+        const count = memoryStore.getMessageCount();
+        console.log(`\nMemory: ${count} messages stored\n`);
+        return;
+      }
+
+      try {
+        const out = await runJob(task, graph, memoryStore);
+        console.log("\n=== FINAL ===");
+        console.log(out);
+        console.log("=============\n");
+      } catch (e: any) {
+        console.error("Job error:", e?.message ?? e);
+      }
+    });
+
+    process.on("SIGINT", async () => {
+      console.log("\nShutting down...");
+      await browserController.close();
+      process.exit(0);
+    });
+  }
 }
 
 main().catch((e) => {
